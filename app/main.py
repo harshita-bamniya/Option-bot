@@ -15,11 +15,19 @@ from typing import List
 from app.config.constants import INSTRUMENT_UNIVERSE
 from app.config.settings import settings
 from app.data.market_data_service import MarketDataService
+from app.scheduler.jobs import job_warmup
 from app.scheduler.scheduler import build_scheduler
 from app.telegram_bot.bot import build_application
 from app.utils.logging import get_logger
 
 log = get_logger(__name__)
+
+
+async def _warmup_bg() -> None:
+    try:
+        await job_warmup()
+    except Exception:
+        log.exception("startup_warmup_failed")
 
 
 def _live_symbols() -> List[str]:
@@ -54,6 +62,10 @@ async def _run() -> None:
     await tg_app.updater.start_polling()
     sched.start()
     md_task = asyncio.create_task(md.run(), name="market_data")
+
+    # Warmup historical data on every startup (safe — upserts on conflict)
+    log.info("warmup_starting")
+    asyncio.create_task(_warmup_bg(), name="warmup")
 
     log.info("startup_complete")
     try:

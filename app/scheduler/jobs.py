@@ -19,7 +19,7 @@ from sqlalchemy import select
 from app.alerts.alert_engine import AlertEngine
 from app.config.constants import INSTRUMENT_UNIVERSE
 from app.db.models import User
-from app.db.repositories import IVHistoryRepo
+from app.db.repositories import IVHistoryRepo, MarketDataRepo
 from app.db.session import get_session
 from app.news.marketaux import MarketauxClient
 from app.telegram_bot.service import TelegramService
@@ -27,6 +27,51 @@ from app.utils.clock import is_market_open, now_ist
 from app.utils.logging import get_logger
 
 log = get_logger(__name__)
+
+
+# ----------------- 08:30 — historical warmup -----------------
+
+async def job_warmup() -> None:
+    """Pull last 200 bars for each instrument × timeframe into the DB.
+
+    Uses TrueData REST historical API. Safe to re-run — upserts on conflict.
+    Trial account limits: 15 days bar history, max 200 bars/request.
+    """
+    from app.data.historical import TrueDataHistorical
+    from app.data.truedata_client import _TD_SYMBOL_MAP
+
+    hist = TrueDataHistorical()
+    total_rows = 0
+    try:
+        for sym in INSTRUMENT_UNIVERSE:
+            td_sym = _TD_SYMBOL_MAP.get(sym, sym)
+            for tf in ("15m", "1h", "1d"):
+                try:
+                    df = await hist.get_last_n_bars(td_sym, n=200, timeframe=tf)
+                    if df.empty:
+                        log.warning("warmup_no_data", sym=sym, tf=tf)
+                        continue
+                    rows = []
+                    for ts, row in df.iterrows():
+                        rows.append({
+                            "instrument": sym,
+                            "timeframe":  tf,
+                            "ts":         ts,
+                            "open":       float(row.get("open") or 0),
+                            "high":       float(row.get("high") or 0),
+                            "low":        float(row.get("low")  or 0),
+                            "close":      float(row.get("close") or 0),
+                            "volume":     int(row.get("volume") or 0),
+                        })
+                    if rows:
+                        MarketDataRepo.insert_candles(rows)
+                        total_rows += len(rows)
+                        log.info("warmup_loaded", sym=sym, tf=tf, rows=len(rows))
+                except Exception:
+                    log.exception("warmup_symbol_failed", sym=sym, tf=tf)
+    finally:
+        await hist.close()
+    log.info("warmup_complete", total_rows=total_rows)
 
 
 # ----------------- 09:00 — pre-market brief -----------------

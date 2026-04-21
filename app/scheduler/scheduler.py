@@ -17,6 +17,12 @@ def build_scheduler(bot, svc: TelegramService) -> AsyncIOScheduler:
     sched = AsyncIOScheduler(timezone=settings.tz)
     engine = AlertEngine()
 
+    # 08:30 IST — historical warmup (backfill missing bars)
+    sched.add_job(
+        jobs.job_warmup, CronTrigger(hour=8, minute=30, day_of_week="mon-fri"),
+        id="warmup", replace_existing=True,
+    )
+
     # 09:00 IST — pre-market brief, weekdays
     sched.add_job(
         jobs.job_premarket_brief, CronTrigger(hour=9, minute=0, day_of_week="mon-fri"),

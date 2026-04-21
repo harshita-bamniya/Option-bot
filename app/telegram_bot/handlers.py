@@ -283,6 +283,20 @@ async def cmd_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 # ---------------------- system ----------------------
 
+async def cmd_warmup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Manually trigger historical data backfill."""
+    await update.message.reply_text("⏳ Pulling historical data for all instruments... (~30s)")
+    try:
+        from app.scheduler.jobs import job_warmup
+        await job_warmup()
+        await update.message.reply_text(
+            "✅ Warmup complete! Historical data loaded.\n"
+            "Try /analyze NIFTY now."
+        )
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Warmup failed: {e}")
+
+
 async def cmd_learn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = _service(context).learn_status(update.effective_chat.id)
     await update.message.reply_text(msg)

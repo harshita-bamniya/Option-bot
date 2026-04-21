@@ -45,6 +45,7 @@ def build_application() -> Application:
         ("setcapital", h.cmd_setcapital),
         ("setrisk", h.cmd_setrisk),
         ("alerts", h.cmd_alerts),
+        ("warmup", h.cmd_warmup),
         ("learn", h.cmd_learn),
         ("history", h.cmd_history),
         ("help", h.cmd_help),
