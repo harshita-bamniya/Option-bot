@@ -34,6 +34,19 @@ from app.utils.logging import get_logger
 
 log = get_logger(__name__)
 
+# ── TrueData symbol name mapping (our internal name → TrueData API name) ─────
+# NSE indices need the "-I" suffix in TrueData's symbol universe
+_TD_SYMBOL_MAP: dict[str, str] = {
+    "NIFTY":      "NIFTY-I",
+    "BANKNIFTY":  "BANKNIFTY-I",
+    "FINNIFTY":   "FINNIFTY-I",
+    "MIDCPNIFTY": "MIDCPNIFTY-I",
+    "NIFTYIT":    "NIFTYIT-I",
+    "INDIAVIX":   "INDIAVIX",
+}
+# Reverse map: TrueData name → our internal name (for tick labelling)
+_TD_SYMBOL_REVERSE: dict[str, str] = {v: k for k, v in _TD_SYMBOL_MAP.items()}
+
 # ── Trade-array field positions ──────────────────────────────────────────────
 _IDX_SYM_ID    = 0
 _IDX_TS        = 1
@@ -79,6 +92,8 @@ class TrueDataClient:
 
     def __init__(self, symbols: List[str]) -> None:
         self.symbols   = symbols
+        # Translate internal symbol names → TrueData API names
+        self._td_symbols = [_TD_SYMBOL_MAP.get(s, s) for s in symbols]
         self._user     = settings.truedata_user
         self._password = settings.truedata_password
         self._host     = settings.truedata_ws_url
@@ -90,12 +105,13 @@ class TrueDataClient:
         self._queue: asyncio.Queue[Optional[Tick]] = asyncio.Queue(
             maxsize=self.MAX_QUEUE_SIZE
         )
-        self._symbol_map: Dict[str, str] = {}       # symbolID → symbol name
+        self._symbol_map: Dict[str, str] = {}       # symbolID → internal symbol name
         self._ws: Optional[websocket.WebSocketApp] = None
         self._thread: Optional[threading.Thread]   = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._last_heartbeat = time.monotonic()
         self._running = False
+        self._logged_in = False   # track login state to distinguish error types
 
     # ── public interface ─────────────────────────────────────────────────────
 
@@ -157,6 +173,7 @@ class TrueDataClient:
                 pass
         time.sleep(self.RECONNECT_DELAY)
         self._symbol_map.clear()
+        self._logged_in = False
         self._start_ws_thread()
 
     # ── WS callbacks (run in the WS thread) ──────────────────────────────────
@@ -170,6 +187,7 @@ class TrueDataClient:
 
     def _on_close(self, ws, code, msg) -> None:
         log.warning("truedata_ws_closed", code=code, msg=msg)
+        self._logged_in = False
         if self._running:
             time.sleep(self.RECONNECT_DELAY)
             self._symbol_map.clear()
@@ -188,18 +206,26 @@ class TrueDataClient:
 
         # ── 2. Login success → subscribe symbols ───────────────────────────
         if data.get("success") and data.get("message") == "TrueData Real Time Data Service":
+            self._logged_in = True
             log.info("truedata_login_success",
                      segments=data.get("segments"),
                      validity=data.get("validity"))
+            log.info("truedata_subscribing_symbols", symbols=self._td_symbols)
             ws.send(json.dumps({
                 "method":  "addsymbol",
-                "symbols": self.symbols,
+                "symbols": self._td_symbols,
             }))
             return
 
-        # ── 3. Login failure ────────────────────────────────────────────────
+        # ── 3. Failure response — distinguish login vs addsymbol failure ────
         if data.get("success") is False:
-            log.error("truedata_login_failed", msg=data.get("message"))
+            msg = data.get("message", "")
+            if not self._logged_in:
+                log.error("truedata_login_failed", msg=msg)
+            else:
+                log.error("truedata_addsymbol_failed", msg=msg,
+                          symbols=self._td_symbols,
+                          hint="Check symbol names — indices need '-I' suffix e.g. NIFTY-I")
             return
 
         # ── 4. Touchline / symbols added → build symbol map ─────────────────
@@ -207,11 +233,15 @@ class TrueDataClient:
             for row in data.get("symbollist", []):
                 # row: [Symbol, SymbolID, Timestamp, LTP, ...]
                 if len(row) >= 2:
-                    sym_id   = str(row[1])
-                    sym_name = str(row[0])
-                    self._symbol_map[sym_id] = sym_name
-                    log.debug("truedata_symbol_mapped", sym=sym_name, id=sym_id,
+                    sym_id  = str(row[1])
+                    td_name = str(row[0])
+                    # Map back to internal name if possible
+                    internal = _TD_SYMBOL_REVERSE.get(td_name, td_name)
+                    self._symbol_map[sym_id] = internal
+                    log.debug("truedata_symbol_mapped", td_sym=td_name,
+                              internal=internal, id=sym_id,
                               ltp=row[3] if len(row) > 3 else None)
+            log.info("truedata_symbols_subscribed", count=len(self._symbol_map))
             return
 
         # ── 5. Real-time tick ────────────────────────────────────────────────

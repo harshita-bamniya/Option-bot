@@ -489,3 +489,51 @@ MIT License
 ---
 
 *Built with Python 3.11 · TrueData · TimescaleDB · Redis · python-telegram-bot · Groq / Anthropic Claude*
+
+
+
+
+
+Step 1 — First thing to do (only once)
+/start — This is the onboarding wizard. It asks you 4 questions:
+
+Question	Example answer
+Your capital in INR	500000
+Risk per trade %	1
+Trade style	Intraday / Swing / Positional / All
+Watchlist	NIFTY,BANKNIFTY
+Step 2 — Regular commands to use daily
+🔍 Analysis
+Command	What it does
+/analyze NIFTY	Full analysis — direction, entry, SL, target, IV, pattern, news
+/quick BANKNIFTY	Fast 3-line scan — good for quick check
+/positional NIFTY	Long-term setup using Daily + Weekly charts
+/swing RELIANCE	2–5 day swing trade setup
+/trade NIFTY CE 24500	Analysis on a specific options strike
+/iv NIFTY	IV Rank + which strategy to use (buy/sell options)
+/levels NIFTY	Support/Resistance + Fibonacci levels
+/news NIFTY	Latest news + sentiment score
+👁️ Watchlist
+Command	What it does
+/watchlist	Scans all instruments in your watchlist at once
+/addwatch SBIN	Adds a new symbol to your watchlist
+⚙️ Settings
+Command	What it does
+/settings	View your current capital, risk %, alerts status
+/setcapital 500000	Update your capital
+/setrisk 1	Update risk per trade (0.5 / 1 / 1.5 / 2)
+/alerts on	Turn on automatic alerts
+/alerts off	Turn off automatic alerts
+📊 System
+Command	What it does
+/status	Market open/closed, current session, VIX
+/history	Last 15 signals the bot generated
+/learn	Learning engine stats (weekly weight updates)
+/help	Shows all commands
+Recommended first session order
+/start          ← setup your profile
+/status         ← check market is open
+/analyze NIFTY  ← first full analysis
+/iv NIFTY       ← check IV before trading options
+/levels NIFTY   ← see key price levels
+/alerts on      ← turn on auto alerts
