@@ -6,6 +6,60 @@ A production-grade, AI-powered trading assistant that ingests live market data f
 
 ---
 
+## ⚡ Quick Start (All Commands in One Place)
+
+> Complete setup from zero to running bot — copy-paste these in order.
+
+```bash
+# 1. Clone the project
+git clone https://github.com/YOUR_USERNAME/Option_bot.git
+cd Option_bot
+
+# 2. Create virtual environment with Python 3.11
+py -3.11 -m venv .venv
+
+# 3. Activate virtual environment
+.venv\Scripts\activate          # Windows
+# source .venv/bin/activate     # Mac / Linux
+
+# 4. Install all Python dependencies
+pip install --upgrade pip wheel setuptools
+pip install -r requirements.txt
+
+# 5. Start Docker Desktop (open the app manually), then pull & start containers
+docker compose -f docker/docker-compose.yml up -d
+
+# 6. Verify containers are running
+docker ps
+# Expected: copilot-pg (healthy) on port 5433 | copilot-redis on port 6379
+
+# 7. Fill in your API keys in .env file (open with any text editor)
+#    Required: TELEGRAM_BOT_TOKEN, TRUEDATA_USER, TRUEDATA_PASSWORD
+#    Optional: GROQ_API_KEY (free AI), MARKETAUX_KEY (news)
+
+# 8. Run database migrations (creates all tables)
+.venv\Scripts\python.exe -m app.db.migrate
+# Mac/Linux: .venv/bin/python -m app.db.migrate
+
+# 9. Run tests to verify everything works
+.venv\Scripts\python.exe -m pytest -v
+# Expected: 28 passed
+
+# 10. Start the bot 🚀
+.venv\Scripts\python.exe -m app.main
+# Mac/Linux: .venv/bin/python -m app.main
+```
+
+Once running, open Telegram → find your bot → send `/start` 🎉
+
+> **Every time you restart your PC:** Start Docker Desktop first, then run step 10.
+> ```bash
+> docker compose -f docker/docker-compose.yml up -d   # start DB + Redis
+> .venv\Scripts\python.exe -m app.main                # start the bot
+> ```
+
+---
+
 ## What This Project Does
 
 When you send `/analyze NIFTY` on Telegram, the system:
