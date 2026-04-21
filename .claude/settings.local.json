@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pandoc --track-changes=all \"C:\\\\Users\\\\dell\\\\Downloads\\\\AI_Trading_CoPilot_v2_FINAL.docx\" -o \"E:\\\\GalaxyWeblinks\\\\Option_bot\\\\spec.md\")",
+      "Bash(pandoc --track-changes=all '/c/Users/dell/Downloads/AI_Trading_CoPilot_v2_FINAL.docx' -o '/e/GalaxyWeblinks/Option_bot/spec.md')",
+      "Bash(where pandoc:*)",
+      "Bash(where python:*)",
+      "Bash(python -c \"import docx; print\\(docx.__version__\\)\")",
+      "Bash(python -m pip install python-docx --quiet)",
+      "Bash(python -c ':*)",
+      "Bash(pip --version)",
+      "Bash(py -3.11 --version)",
+      "Bash(py -3.13 --version)",
+      "Bash(py -3.11 -m venv .venv)",
+      "Bash(.venv/Scripts/python.exe -m pip install --upgrade pip wheel setuptools)",
+      "Bash(.venv/Scripts/python.exe -m pip install -r requirements.txt)",
+      "Bash(.venv/Scripts/python.exe -m pip index versions pandas-ta)",
+      "Bash(.venv/Scripts/python.exe -m pip install \"pandas-ta @ git+https://github.com/twopirllc/pandas-ta.git@development\")",
+      "Bash(.venv/Scripts/python.exe -m pip install pandas-ta-classic)",
+      "Bash(.venv/Scripts/python.exe -c 'import re,sys; p='\\\\''__TRACKED_VAR__'\\\\''; s=open\\(p,encoding='\\\\''utf-8'\\\\''\\).read\\(\\); s=s.replace\\('\\\\''import pandas_ta as ta'\\\\'','\\\\''import pandas_ta_classic as ta'\\\\''\\); open\\(p,'\\\\''w'\\\\'',encoding='\\\\''utf-8'\\\\''\\).write\\(s\\); print\\('\\\\''patched'\\\\'',p\\)')",
+      "Bash(.venv/Scripts/python.exe -m pip install --only-binary=:all: lz4)",
+      "Bash(.venv/Scripts/python.exe -m pip install truedata-ws)",
+      "Bash(.venv/Scripts/python.exe -m pip install truedata)",
+      "Bash(.venv/Scripts/python.exe -c \"import truedata; print\\(dir\\(truedata\\)\\)\")",
+      "Bash(.venv/Scripts/python.exe -c \"from truedata import TD_live; help\\(TD_live.__init__\\)\")",
+      "Bash(.venv/Scripts/python.exe -m pytest)",
+      "Bash(.venv/Scripts/python.exe -m app.db.migrate)",
+      "Bash(docker exec:*)",
+      "Bash(netstat -ano)",
+      "Bash(tasklist /FI \"PID eq 7812\")",
+      "Bash(tasklist /FI \"PID eq 21976\")",
+      "Bash(tasklist //FI \"PID eq 7812\")",
+      "Bash(tasklist //FI \"PID eq 21976\")",
+      "Bash(docker compose:*)",
+      "Bash(.venv/Scripts/python.exe -c \"from truedata import TD_live; import inspect; print\\(inspect.signature\\(TD_live.start_live_data\\)\\)\")",
+      "Bash(.venv/Scripts/python.exe -c \"from truedata import TD_live; import inspect; src = inspect.getsource\\(TD_live.__init__\\); print\\(src[:600]\\)\")"
+    ]
+  }
+}
