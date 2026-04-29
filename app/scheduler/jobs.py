@@ -34,34 +34,39 @@ log = get_logger(__name__)
 async def job_warmup() -> None:
     """Pull last 200 bars for each instrument × timeframe into the DB.
 
-    Uses TrueData REST historical API. Safe to re-run — upserts on conflict.
-    Trial account limits: 15 days bar history, max 200 bars/request.
+    Intraday (15m, 1h)  → TrueData REST API
+    Daily (1d)          → Yahoo Finance (free, no API key, valid OHLCV data)
+
+    Safe to re-run — upserts on conflict.
     """
     from app.data.historical import TrueDataHistorical
-    from app.data.truedata_client import _TD_SYMBOL_MAP
+    from app.data.symbols import truedata_historical_symbol
 
     hist = TrueDataHistorical()
     total_rows = 0
     try:
+        # ── Step 1: Intraday bars from TrueData ─────────────────────────────
         for sym in INSTRUMENT_UNIVERSE:
-            td_sym = _TD_SYMBOL_MAP.get(sym, sym)
-            for tf in ("15m", "1h", "1d"):
+            td_sym = truedata_historical_symbol(sym)
+            for tf in ("15m", "1h"):
                 try:
                     df = await hist.get_last_n_bars(td_sym, n=200, timeframe=tf)
                     if df.empty:
                         log.warning("warmup_no_data", sym=sym, tf=tf)
                         continue
+                    valid = df[df.get("close", df.iloc[:, 3]) > 0] if not df.empty else df
+                    if valid.empty:
+                        log.warning("warmup_all_zero", sym=sym, tf=tf)
+                        continue
                     rows = []
-                    for ts, row in df.iterrows():
+                    for ts, row in valid.iterrows():
                         rows.append({
-                            "instrument": sym,
-                            "timeframe":  tf,
-                            "ts":         ts,
-                            "open":       float(row.get("open") or 0),
-                            "high":       float(row.get("high") or 0),
-                            "low":        float(row.get("low")  or 0),
-                            "close":      float(row.get("close") or 0),
-                            "volume":     int(row.get("volume") or 0),
+                            "instrument": sym, "timeframe": tf, "ts": ts,
+                            "open":   float(row.get("open")   or 0),
+                            "high":   float(row.get("high")   or 0),
+                            "low":    float(row.get("low")    or 0),
+                            "close":  float(row.get("close")  or 0),
+                            "volume": int(row.get("volume")   or 0),
                         })
                     if rows:
                         MarketDataRepo.insert_candles(rows)
@@ -69,9 +74,72 @@ async def job_warmup() -> None:
                         log.info("warmup_loaded", sym=sym, tf=tf, rows=len(rows))
                 except Exception:
                     log.exception("warmup_symbol_failed", sym=sym, tf=tf)
+
+        # ── Step 2: Daily bars from Yahoo Finance (reliable OHLCV) ──────────
+        _yahoo_warmup(total_rows)
+
     finally:
         await hist.close()
     log.info("warmup_complete", total_rows=total_rows)
+
+
+# Yahoo Finance ticker map for Indian indices
+_YAHOO_TICKER_MAP: dict[str, str] = {
+    "NIFTY":      "^NSEI",
+    "BANKNIFTY":  "^NSEBANK",
+    "FINNIFTY":   "NIFTY_FIN_SERVICE.NS",
+    "MIDCPNIFTY": "^NSEMDCP50",
+    "NIFTYIT":    "^CNXIT",
+    "INDIAVIX":   "^INDIAVIX",
+}
+
+
+def _yahoo_warmup(total_rows_ref: int) -> int:
+    """Pull 1Y daily candles from Yahoo Finance for all instruments."""
+    try:
+        import yfinance as yf
+    except ImportError:
+        log.warning("yfinance_not_installed_skipping_daily_warmup")
+        return total_rows_ref
+
+    import pytz
+    ist = pytz.timezone("Asia/Kolkata")
+
+    for sym, ticker in _YAHOO_TICKER_MAP.items():
+        try:
+            raw = yf.download(ticker, period="1y", interval="1d",
+                              progress=False, auto_adjust=True)
+            if raw.empty:
+                log.warning("yahoo_no_data", sym=sym, ticker=ticker)
+                continue
+            # Flatten multi-level columns if present
+            if isinstance(raw.columns, __import__("pandas").MultiIndex):
+                raw.columns = [c[0].lower() for c in raw.columns]
+            else:
+                raw.columns = [c.lower() for c in raw.columns]
+            raw = raw[raw["close"] > 0].dropna(subset=["close"])
+            rows = []
+            for ts, row in raw.iterrows():
+                # Ensure timezone-aware IST timestamp
+                if hasattr(ts, "tzinfo") and ts.tzinfo is not None:
+                    ts_ist = ts.astimezone(ist)
+                else:
+                    ts_ist = ist.localize(ts.replace(hour=0, minute=0, second=0))
+                rows.append({
+                    "instrument": sym, "timeframe": "1d", "ts": ts_ist,
+                    "open":   float(row.get("open")   or row.get("Open")   or 0),
+                    "high":   float(row.get("high")   or row.get("High")   or 0),
+                    "low":    float(row.get("low")    or row.get("Low")    or 0),
+                    "close":  float(row.get("close")  or row.get("Close")  or 0),
+                    "volume": int(row.get("volume")   or row.get("Volume") or 0),
+                })
+            if rows:
+                MarketDataRepo.insert_candles(rows)
+                total_rows_ref += len(rows)
+                log.info("warmup_yahoo_loaded", sym=sym, rows=len(rows))
+        except Exception:
+            log.exception("warmup_yahoo_failed", sym=sym, ticker=ticker)
+    return total_rows_ref
 
 
 # ----------------- 09:00 — pre-market brief -----------------
@@ -114,8 +182,7 @@ async def job_chain_snapshot(svc: TelegramService, bot, engine: AlertEngine) -> 
         if not meta.get("options"):
             continue
         try:
-            expiry = svc._nearest_expiry()
-            chain = await svc.chain_svc.fetch(sym, expiry)
+            chain = await svc.chain_svc.fetch(sym)
             if not chain:
                 continue
             atm = chain.atm_strike()
@@ -155,8 +222,7 @@ async def job_eod_iv(svc: TelegramService) -> None:
         if not meta.get("options"):
             continue
         try:
-            expiry = svc._nearest_expiry()
-            chain = await svc.chain_svc.fetch(sym, expiry)
+            chain = await svc.chain_svc.fetch(sym)
             if not chain:
                 continue
             atm = chain.atm_strike()

@@ -5,7 +5,7 @@ behind a single object so handlers stay thin.
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import timedelta
 from typing import List, Optional
 
 import pandas as pd
@@ -13,6 +13,7 @@ import pandas as pd
 from app.core.analyzer import Analyzer, AnalysisResult
 from app.data.market_data_service import MarketDataService
 from app.data.options_chain import OptionsChainService, OptionsChain
+from app.data.symbols import canonicalize_instrument
 from app.db.repositories import MarketDataRepo, UserRepo, SignalRepo
 from app.explain.explainer import Explainer
 from app.explain.fallback_formatter import render_quick, render_options_trade
@@ -20,8 +21,8 @@ from app.news.marketaux import MarketauxClient
 from app.news.sentiment import SentimentScorer
 from app.config.constants import INSTRUMENT_UNIVERSE
 from app.options.black_scholes import bs_greeks, implied_vol
-from app.options.iv_rank import compute_iv_metrics
-from app.utils.clock import days_to_weekly_expiry, now_ist
+from app.options.iv_rank import compute_iv_metrics, realized_vol_from_candles, realized_vol_rank
+from app.utils.clock import now_ist
 from app.utils.logging import get_logger
 
 log = get_logger(__name__)
@@ -79,7 +80,7 @@ class TelegramService:
     async def _run_analysis(
         self, instrument: str, chat_id: int, *, style: str = "mixed"
     ) -> Optional[AnalysisResult]:
-        instrument = instrument.upper()
+        instrument = canonicalize_instrument(instrument)
         if instrument not in INSTRUMENT_UNIVERSE:
             log.info("unknown_instrument", instrument=instrument)
 
@@ -97,8 +98,7 @@ class TelegramService:
         iv_now: Optional[float] = None
         inst_meta = INSTRUMENT_UNIVERSE.get(instrument, {})
         if inst_meta.get("options"):
-            expiry = self._nearest_expiry()
-            chain = await self.chain_svc.fetch(instrument, expiry)
+            chain = await self.chain_svc.fetch(instrument)
             if chain:
                 atm = chain.atm_strike()
                 if atm:
@@ -106,6 +106,15 @@ class TelegramService:
                                       if q.strike == atm and q.option_type == "CE" and q.iv), None)
                     if atm_quote and atm_quote.iv:
                         iv_now = float(atm_quote.iv) / 100.0 if atm_quote.iv > 5 else float(atm_quote.iv)
+
+            # Fallback: estimate IV from realized volatility when chain unavailable
+            if iv_now is None:
+                daily_df = candles.get("1d")
+                if daily_df is not None and not daily_df.empty:
+                    iv_now = realized_vol_from_candles(daily_df)
+                    if iv_now:
+                        log.info("iv_estimated_from_realized_vol",
+                                 instrument=instrument, iv_now=round(iv_now, 4))
 
         # News sentiment (last 6h)
         articles = await self.news.all_news(
@@ -133,19 +142,11 @@ class TelegramService:
         )
         return result
 
-    def _nearest_expiry(self) -> date:
-        """Nearest weekly NSE index expiry (Thursday)."""
-        today = now_ist().date()
-        days_ahead = (3 - today.weekday()) % 7     # Thu=3
-        if days_ahead == 0:
-            return today
-        return today + timedelta(days=days_ahead)
-
     # ---------- specific commands ----------
 
     async def iv_report(self, instrument: str) -> str:
-        expiry = self._nearest_expiry()
-        chain = await self.chain_svc.fetch(instrument, expiry)
+        instrument = canonicalize_instrument(instrument)
+        chain = await self.chain_svc.fetch(instrument)
         if not chain:
             return f"⚠️ No options chain available for {instrument}."
         atm = chain.atm_strike()
@@ -166,18 +167,19 @@ class TelegramService:
         )
 
     async def trade(self, instrument: str, option_type: str, strike: float) -> str:
+        instrument = canonicalize_instrument(instrument)
         option_type = option_type.upper()
         if option_type not in ("CE", "PE"):
             return "⚠️ Option type must be CE or PE."
-        expiry = self._nearest_expiry()
-        chain = await self.chain_svc.fetch(instrument, expiry)
+        chain = await self.chain_svc.fetch(instrument)
         if not chain:
             return f"⚠️ Chain unavailable for {instrument}."
         q = next((x for x in chain.quotes if x.strike == strike and x.option_type == option_type), None)
         if not q:
             return f"⚠️ No quote for {instrument} {strike} {option_type}."
         spot = chain.spot
-        T = max(days_to_weekly_expiry(now_ist()), 1) / 365.0
+        days_to_expiry = max((chain.expiry - now_ist().date()).days, 0)
+        T = max(days_to_expiry, 1) / 365.0
         sigma = (q.iv / 100 if q.iv and q.iv > 5 else q.iv) if q.iv else implied_vol(
             price=q.ltp or 0, S=spot, K=strike, T=T,
             option_type="C" if option_type == "CE" else "P",
@@ -199,6 +201,7 @@ class TelegramService:
         )
 
     async def levels(self, instrument: str) -> str:
+        instrument = canonicalize_instrument(instrument)
         from app.indicators.structure import compute_key_levels
         df = MarketDataRepo.recent(instrument, "1d", 60)
         if df.empty:
@@ -214,6 +217,7 @@ class TelegramService:
         )
 
     async def news_brief(self, instrument: str) -> str:
+        instrument = canonicalize_instrument(instrument)
         articles = await self.news.all_news(
             symbols=[instrument], since=now_ist() - timedelta(hours=12), limit=10,
         )

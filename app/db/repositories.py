@@ -68,7 +68,9 @@ class MarketDataRepo:
     def recent(instrument: str, timeframe: str, limit: int = 500) -> pd.DataFrame:
         with get_session() as s:
             q = (select(MarketData)
-                 .where(MarketData.instrument == instrument, MarketData.timeframe == timeframe)
+                 .where(MarketData.instrument == instrument,
+                        MarketData.timeframe == timeframe,
+                        MarketData.close > 0)          # filter zero/corrupt candles
                  .order_by(desc(MarketData.ts))
                  .limit(limit))
             rows = s.execute(q).scalars().all()

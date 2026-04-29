@@ -37,7 +37,14 @@ class MarketauxClient:
             "limit": min(limit, 100),
         }
         if symbols:
-            params["symbols"] = ",".join(symbols)
+            # Marketaux uses exchange:ticker format (e.g. NSE:RELIANCE).
+            # Index names (NIFTY, BANKNIFTY etc.) are not valid symbols —
+            # drop them and rely on country+language filter for Indian news.
+            _INDEX_NAMES = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY",
+                            "NIFTYIT", "INDIAVIX"}
+            valid_syms = [s for s in symbols if s.upper() not in _INDEX_NAMES]
+            if valid_syms:
+                params["symbols"] = ",".join(valid_syms)
         if since:
             params["published_after"] = since.astimezone().isoformat(timespec="seconds")
         try:
@@ -45,8 +52,8 @@ class MarketauxClient:
             r.raise_for_status()
             payload = r.json()
             return payload.get("data", [])
-        except Exception:
-            log.exception("marketaux_fetch_failed")
+        except Exception as e:
+            log.warning("marketaux_fetch_failed", error=str(e)[:120])
             return []
 
     async def close(self) -> None:

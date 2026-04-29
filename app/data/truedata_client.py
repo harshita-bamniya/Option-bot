@@ -29,23 +29,15 @@ from typing import AsyncIterator, Dict, List, Optional
 import websocket  # websocket-client
 
 from app.config.settings import settings
+from app.data.symbols import (
+    canonicalize_instrument,
+    truedata_to_internal_symbol,
+    truedata_ws_symbol,
+)
 from app.utils.clock import ist
 from app.utils.logging import get_logger
 
 log = get_logger(__name__)
-
-# ── TrueData symbol name mapping (our internal name → TrueData API name) ─────
-# NSE indices need the "-I" suffix in TrueData's symbol universe
-_TD_SYMBOL_MAP: dict[str, str] = {
-    "NIFTY":      "NIFTY-I",
-    "BANKNIFTY":  "BANKNIFTY-I",
-    "FINNIFTY":   "FINNIFTY-I",
-    "MIDCPNIFTY": "MIDCPNIFTY-I",
-    "NIFTYIT":    "NIFTYIT-I",
-    "INDIAVIX":   "INDIAVIX",
-}
-# Reverse map: TrueData name → our internal name (for tick labelling)
-_TD_SYMBOL_REVERSE: dict[str, str] = {v: k for k, v in _TD_SYMBOL_MAP.items()}
 
 # ── Trade-array field positions ──────────────────────────────────────────────
 _IDX_SYM_ID    = 0
@@ -91,9 +83,9 @@ class TrueDataClient:
     MAX_QUEUE_SIZE    = 10_000
 
     def __init__(self, symbols: List[str]) -> None:
-        self.symbols   = symbols
+        self.symbols   = [canonicalize_instrument(symbol) for symbol in symbols]
         # Translate internal symbol names → TrueData API names
-        self._td_symbols = [_TD_SYMBOL_MAP.get(s, s) for s in symbols]
+        self._td_symbols = [truedata_ws_symbol(s) for s in self.symbols]
         self._user     = settings.truedata_user
         self._password = settings.truedata_password
         self._host     = settings.truedata_ws_url
@@ -172,7 +164,9 @@ class TrueDataClient:
             except Exception:
                 pass
         time.sleep(self.RECONNECT_DELAY)
-        self._symbol_map.clear()
+        # Keep symbol_map intact — TrueData sends touchline again after re-login
+        # which will refresh/overwrite it. Keeping old map means ticks during
+        # the brief reconnect window still resolve to correct instrument names.
         self._logged_in = False
         self._start_ws_thread()
 
@@ -190,7 +184,7 @@ class TrueDataClient:
         self._logged_in = False
         if self._running:
             time.sleep(self.RECONNECT_DELAY)
-            self._symbol_map.clear()
+            # Do NOT clear symbol_map — keep existing mappings as cache
             self._start_ws_thread()
 
     def _on_message(self, ws, raw: str) -> None:
@@ -225,7 +219,7 @@ class TrueDataClient:
             else:
                 log.error("truedata_addsymbol_failed", msg=msg,
                           symbols=self._td_symbols,
-                          hint="Check symbol names — indices need '-I' suffix e.g. NIFTY-I")
+                          hint="Check the canonical TrueData symbol mapping for this instrument")
             return
 
         # ── 4. Touchline / symbols added → build symbol map ─────────────────
@@ -236,7 +230,7 @@ class TrueDataClient:
                     sym_id  = str(row[1])
                     td_name = str(row[0])
                     # Map back to internal name if possible
-                    internal = _TD_SYMBOL_REVERSE.get(td_name, td_name)
+                    internal = truedata_to_internal_symbol(td_name)
                     self._symbol_map[sym_id] = internal
                     log.debug("truedata_symbol_mapped", td_sym=td_name,
                               internal=internal, id=sym_id,

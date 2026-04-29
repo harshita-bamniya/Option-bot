@@ -13,7 +13,9 @@ import httpx
 
 from app.config.settings import settings
 from app.data.cache import cache, k_options_chain
+from app.data.symbols import canonicalize_instrument, truedata_options_chain_symbol
 from app.utils.clock import now_ist
+from app.utils.expiry import expiry_candidates
 from app.utils.logging import get_logger
 
 log = get_logger(__name__)
@@ -67,35 +69,62 @@ class OptionsChainService:
 
     def __init__(self, base_url: Optional[str] = None) -> None:
         # TrueData option chain is on api.truedata.in (not history.)
-        self._base = base_url or "https://api.truedata.in"
+        self._base = base_url or settings.truedata_api_url
         self._client = httpx.AsyncClient(timeout=10.0)
 
-    async def fetch(self, instrument: str, expiry: date) -> Optional[OptionsChain]:
-        cache_key = k_options_chain(instrument, expiry.isoformat())
-        cached = cache.get_json(cache_key)
-        if cached:
-            return _deserialize(cached)
+    async def fetch(self, instrument: str, expiry: Optional[date] = None) -> Optional[OptionsChain]:
+        instrument = canonicalize_instrument(instrument)
+        requested_expiry = expiry
+        candidate_expiries = _dedupe_expiries(
+            [requested_expiry] if requested_expiry else []
+            + expiry_candidates(instrument, start=now_ist().date(), count=4)
+        )
 
+        for candidate in candidate_expiries:
+            cache_key = k_options_chain(instrument, candidate.isoformat())
+            cached = cache.get_json(cache_key)
+            if cached:
+                return _deserialize(cached)
+
+            try:
+                data = await self._request_chain_data(instrument, candidate)
+            except Exception:
+                log.exception("options_chain_fetch_failed", instrument=instrument, expiry=str(candidate))
+                continue
+
+            chain = _parse_truedata(instrument, candidate, data)
+            if chain is None:
+                log.warning(
+                    "options_chain_empty_for_expiry",
+                    instrument=instrument,
+                    expiry=str(candidate),
+                    requested_expiry=str(requested_expiry) if requested_expiry else None,
+                )
+                continue
+
+            if requested_expiry and candidate != requested_expiry:
+                log.warning(
+                    "options_chain_expiry_corrected",
+                    instrument=instrument,
+                    requested_expiry=str(requested_expiry),
+                    resolved_expiry=str(candidate),
+                )
+            cache.set_json(cache_key, _serialize(chain), ttl_seconds=120)
+            return chain
+        return None
+
+    async def _request_chain_data(self, instrument: str, expiry: date) -> dict:
         # TrueData option chain endpoint — expiry as YYYYMMDD (e.g. 20250424)
         url = f"{self._base}/getOptionChain"
         params = {
-            "user":     settings.truedata_user,
+            "user": settings.truedata_user,
             "password": settings.truedata_password,
-            "symbol":   instrument,
-            "expiry":   expiry.strftime("%Y%m%d"),
+            "symbol": truedata_options_chain_symbol(instrument),
+            "expiry": expiry.strftime("%Y%m%d"),
         }
-        try:
-            r = await self._client.get(url, params=params)
-            r.raise_for_status()
-            data = r.json()
-        except Exception:
-            log.exception("options_chain_fetch_failed", instrument=instrument, expiry=str(expiry))
-            return None
-
-        chain = _parse_truedata(instrument, expiry, data)
-        if chain is not None:
-            cache.set_json(cache_key, _serialize(chain), ttl_seconds=120)
-        return chain
+        r = await self._client.get(url, params=params)
+        r.raise_for_status()
+        return r.json()
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -153,6 +182,17 @@ def _parse_truedata(instrument: str, expiry: date, data: dict) -> Optional[Optio
             ))
     return OptionsChain(instrument=instrument, expiry=expiry, spot=spot,
                         ts=now_ist(), quotes=quotes)
+
+
+def _dedupe_expiries(expiries: List[Optional[date]]) -> List[date]:
+    seen: set[date] = set()
+    ordered: List[date] = []
+    for expiry in expiries:
+        if expiry is None or expiry in seen:
+            continue
+        seen.add(expiry)
+        ordered.append(expiry)
+    return ordered
 
 
 def _f(v):

@@ -27,7 +27,7 @@ from app.data.options_chain import OptionsChain
 from app.db.repositories import SignalRepo
 from app.indicators import IndicatorEngine, compute_iis
 from app.indicators.structure import compute_key_levels
-from app.options.iv_rank import compute_iv_metrics
+from app.options.iv_rank import compute_iv_metrics, realized_vol_rank
 from app.options.options_score import options_score
 from app.options.strategy import select_strategy
 from app.patterns.detector import detect_patterns, pattern_score
@@ -121,7 +121,10 @@ class Analyzer:
         iv_rank_val: Optional[float] = None
         iv_pct_val: Optional[float] = None
         if iv_now is not None:
-            iv_metrics = compute_iv_metrics(instrument, iv_now)
+            # Use realized vol rank as fallback when IV history DB is empty
+            daily_df = candles_by_tf.get("1d")
+            rv_rank = realized_vol_rank(daily_df) if daily_df is not None else None
+            iv_metrics = compute_iv_metrics(instrument, iv_now, rv_rank_override=rv_rank)
             iv_rank_val = iv_metrics.get("iv_rank")
             iv_pct_val = iv_metrics.get("iv_percentile")
         direction_hint = 1 if mtfs_raw > 0 else -1 if mtfs_raw < 0 else 0
